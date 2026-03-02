@@ -1,11 +1,33 @@
-# Markdown to Word Document Converter
+# Markdown ↔ Word Document Converter
 
-A Python script that converts Markdown files to Microsoft Word (.docx) format, with support for:
+Python scripts for bidirectional conversion between Markdown and Microsoft Word (.docx) format, enabling seamless round-trip document editing.
+
+## Features
+
+### Markdown to Word (`md_to_docx.py`)
+
+Converts Markdown files to Word format with support for:
 - Headings with automatic numbering (1, 1.1, 1.1.1, etc.)
 - Tables with formatted headers
 - Code blocks (preserves ASCII art diagrams)
 - Numbered and bullet lists
 - Bold and italic text formatting
+- Hyperlinks
+- Horizontal rules
+- YAML front matter for document metadata
+- Title page generation
+- Table of contents
+
+### Word to Markdown (`docx_to_md.py`)
+
+Converts Word documents to Markdown format with support for:
+- Heading extraction (from Word styles)
+- Tables to markdown table syntax
+- Code block detection (via monospace font heuristics)
+- Numbered and bullet lists with nesting
+- Bold, italic, and inline code formatting
+- Hyperlink extraction
+- Image extraction to separate directory
 - Horizontal rules
 
 ## Installation
@@ -28,35 +50,50 @@ A Python script that converts Markdown files to Microsoft Word (.docx) format, w
 
 ## Usage
 
-### Basic Usage
+### Markdown to Word
 
-Convert a markdown file to Word:
-
+**Basic conversion:**
 ```bash
 python md_to_docx.py input.md output.docx
 ```
 
-### With Template Reference
-
-Use a template document to match styles:
-
+**With template for styling:**
 ```bash
-python md_to_docx.py input.md output.docx --template example_format.docx
+python md_to_docx.py input.md output.docx --template template.docx
 ```
 
-### Examples
+### Word to Markdown
 
-Convert a markdown document to a word document.
-
+**Basic conversion:**
 ```bash
-# From the project root directory
-python scripts/md_to_docx.py path/to/mydocument.md output/mydocument.docx
-
-# With template
-python scripts/md_to_docx.py path/to/mydocument.md output/mydocument.docx --template example_format.docx
+python docx_to_md.py input.docx output.md
 ```
+
+**With custom images directory:**
+```bash
+python docx_to_md.py input.docx output.md --images-dir assets/images
+```
+
+### Round-Trip Workflow
+
+The typical workflow for document collaboration:
+
+1. **Author in Markdown** - Write and maintain your document in Markdown
+2. **Convert to Word** - Generate a Word document for distribution
+   ```bash
+   python md_to_docx.py mydoc.md mydoc.docx --template company_template.docx
+   ```
+3. **Distribute for Review** - Send the Word document to reviewers
+4. **Receive Edits** - Get the edited Word document back
+5. **Convert Back to Markdown** - Extract changes to Markdown
+   ```bash
+   python docx_to_md.py mydoc_edited.docx mydoc_updated.md
+   ```
+6. **Review and Merge** - Compare and merge changes into your source Markdown
 
 ## Command-Line Options
+
+### `md_to_docx.py`
 
 | Option | Description |
 |--------|-------------|
@@ -64,7 +101,15 @@ python scripts/md_to_docx.py path/to/mydocument.md output/mydocument.docx --temp
 | `output` | Path for the output Word document (required) |
 | `--template`, `-t` | Path to a template .docx file for style reference (optional) |
 
-## Supported Markdown Elements
+### `docx_to_md.py`
+
+| Option | Description |
+|--------|-------------|
+| `input` | Path to the input Word document (required) |
+| `output` | Path for the output Markdown file (required) |
+| `--images-dir`, `-i` | Directory for extracted images, relative to output file (default: `images`) |
+
+## Supported Elements
 
 ### Headings
 ```markdown
@@ -73,7 +118,10 @@ python scripts/md_to_docx.py path/to/mydocument.md output/mydocument.docx --temp
 ### Heading 3
 ```
 
-Output: Numbered headings (1, 1.1, 1.1.1)
+Word styles mapping:
+- `Title` style → `# Heading 1`
+- `Heading 1` style → `## Heading 2`
+- `Heading 2` style → `### Heading 3`
 
 ### Tables
 ```markdown
@@ -81,8 +129,6 @@ Output: Numbered headings (1, 1.1, 1.1.1)
 |----------|----------|----------|
 | Data 1   | Data 2   | Data 3   |
 ```
-
-Output: Formatted table with header row styling
 
 ### Code Blocks
 ````markdown
@@ -92,21 +138,25 @@ Preserves line breaks and monospace formatting
 ```
 ````
 
-Output: Consolas font, preserved whitespace
+Code blocks are detected by:
+- Triple backtick fences (in Markdown)
+- Monospace fonts like Consolas, Courier New (in Word)
 
 ### Lists
 
-Numbered:
+**Numbered:**
 ```markdown
 1. First item
 2. Second item
+   1. Nested item
 3. Third item
 ```
 
-Bullet:
+**Bullet:**
 ```markdown
 - Item one
 - Item two
+  - Nested item
 - Item three
 ```
 
@@ -115,7 +165,15 @@ Bullet:
 **bold text**
 *italic text*
 `code text`
+[link text](https://example.com)
 ```
+
+### Images
+```markdown
+![image description](images/image_001.png)
+```
+
+Images are extracted from Word documents and saved to the specified images directory.
 
 ### Horizontal Rules
 ```markdown
@@ -124,7 +182,7 @@ Bullet:
 
 ## Output Formatting
 
-The converter applies the following default styles:
+### Markdown to Word Default Styles
 
 | Element | Font | Size | Additional |
 |---------|------|------|------------|
@@ -138,10 +196,11 @@ The converter applies the following default styles:
 
 ## Template Support
 
-When providing a `--template` option, the script will attempt to extract styles from the template document and apply them to the output. This includes:
+When providing a `--template` option to `md_to_docx.py`, the script will:
 
-- Font names and sizes from Heading 1, 2, 3 styles
-- Font settings from the Normal style
+- Use the template's heading styles (Heading 1, 2, 3)
+- Apply the Normal style for body text
+- Preserve headers, footers, and page setup from the template
 
 If style extraction fails, the script falls back to default styles.
 
@@ -153,6 +212,8 @@ Make sure you've installed the dependencies:
 pip install -r requirements.txt
 ```
 
+**Note:** Use `python` (not `python3`) when running in a virtual environment on Windows.
+
 ### Tables not displaying correctly
 Ensure your markdown tables have the separator row:
 ```markdown
@@ -161,33 +222,61 @@ Ensure your markdown tables have the separator row:
 | Data 1   | Data 2   |
 ```
 
-### Code blocks appear inline
-Make sure you're using triple backticks (```) for code blocks, not single backticks.
+### Code blocks not detected in Word
+The converter detects code by looking for monospace fonts. Ensure code blocks in Word use:
+- Consolas
+- Courier New
+- Other monospace fonts
 
-### ASCII art alignment issues
-The script uses Consolas font for code blocks. For best results with ASCII art:
-- Use consistent character widths
-- Avoid very wide diagrams (may exceed page width)
+### Images not extracted
+Images must be embedded in the Word document (not linked). The converter extracts:
+- PNG, JPEG, GIF, BMP images
+- EMF and WMF vector graphics
 
 ## Development
 
 ### Project Structure
 ```
 markdown-converter/
-├── example_format.docx      # Style reference template
 ├── scripts/
-│   ├── md_to_docx.py        # Main converter script
+│   ├── md_to_docx.py        # Markdown → Word converter
+│   ├── docx_to_md.py        # Word → Markdown converter
+│   ├── inspect_styles.py    # Utility to inspect Word styles
 │   ├── requirements.txt     # Python dependencies
 │   └── README.md            # This file
-└── output/                  # Generated documents
+├── input/                   # Input documents
+├── output/                  # Generated documents
+│   └── images/              # Extracted images
+└── template/                # Style templates
 ```
 
-### Extending the Converter
+### Class Architecture
 
-The converter is built with three main classes:
-
+#### `md_to_docx.py`
 1. **MarkdownParser**: Parses markdown into structured elements
-2. **DocxStyleManager**: Manages document styles
-3. **MarkdownToDocxConverter**: Orchestrates the conversion
+2. **MarkdownToDocxConverter**: Converts elements to Word format
 
-To add support for new markdown elements, extend the `MarkdownParser.parse()` method and add a corresponding handler in `MarkdownToDocxConverter._process_element()`.
+#### `docx_to_md.py`
+1. **DocxParser**: Extracts elements from Word documents
+2. **MarkdownGenerator**: Produces markdown from parsed elements
+3. **DocxToMarkdownConverter**: Orchestrates the conversion
+
+### Extending the Converters
+
+**To add new element types:**
+
+1. Add parsing logic in the respective parser class
+2. Add generation logic in the converter/generator class
+3. Update the element type handlers
+
+**Example: Adding support for a new element**
+```python
+# In DocxParser
+def _parse_new_element(self, element):
+    # Extract content
+    return ParsedElement(type='new_type', content=content)
+
+# In MarkdownGenerator
+def _new_element_to_md(self, element):
+    return f"<!-- {element.content} -->"
+```
