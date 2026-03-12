@@ -79,6 +79,22 @@ class MarkdownParser:
                 i += 1
                 continue
             
+            # Check for page break comment
+            if re.match(r'^\s*<!--\s*pagebreak\s*-->\s*$', line.strip(), re.IGNORECASE):
+                self.elements.append({
+                    'type': 'page_break'
+                })
+                i += 1
+                continue
+            
+            # Check for TOC placeholder comment
+            if re.match(r'^\s*<!--\s*toc\s*-->\s*$', line.strip(), re.IGNORECASE):
+                self.elements.append({
+                    'type': 'toc'
+                })
+                i += 1
+                continue
+            
             # Check for horizontal rule
             if re.match(r'^[-*_]{3,}\s*$', line.strip()):
                 self.elements.append({
@@ -357,17 +373,25 @@ class MarkdownToDocxConverter:
         elements = parser.parse()
         self.front_matter = parser.front_matter
         
+        # Check if markdown contains a TOC placeholder
+        has_toc_placeholder = any(e.get('type') == 'toc' for e in elements)
+        
         # Add title page if front matter is present and option is enabled
         if self.add_title_page and self.front_matter:
             self._add_title_page()
         
-        # Add table of contents if enabled
-        if self.add_toc:
+        # Add table of contents if enabled AND no explicit placeholder exists
+        # (If placeholder exists, TOC will be added when we process that element)
+        if self.add_toc and not has_toc_placeholder:
             self._add_table_of_contents()
         
         # Add approval section if enabled (before main content)
-        if self.add_approval_section and self.front_matter:
+        # Only add if no TOC placeholder (approval goes after TOC)
+        if self.add_approval_section and self.front_matter and not has_toc_placeholder:
             self._add_approval_section()
+        
+        # Track if we've added the approval section after TOC placeholder
+        self._approval_added = not self.add_approval_section or not has_toc_placeholder
         
         # Process each element
         for element in elements:
@@ -591,6 +615,10 @@ class MarkdownToDocxConverter:
             self._add_bullet_list(element['content'])
         elif elem_type == 'horizontal_rule':
             self._add_horizontal_rule()
+        elif elem_type == 'page_break':
+            self._add_page_break()
+        elif elem_type == 'toc':
+            self._add_toc_from_placeholder()
     
     def _add_heading(self, text: str, level: int):
         """Add a heading to the document using template styles.
@@ -988,6 +1016,31 @@ class MarkdownToDocxConverter:
         bottom.set(qn('w:color'), '000000')
         pBdr.append(bottom)
         para._p.get_or_add_pPr().append(pBdr)
+    
+    def _add_page_break(self):
+        """Add a page break to the document.
+        
+        Creates an explicit page break that forces content to start on a new page.
+        This is triggered by the <!-- pagebreak --> comment in markdown.
+        """
+        para = self.document.add_paragraph()
+        run = para.add_run()
+        run.add_break(WD_BREAK.PAGE)
+    
+    def _add_toc_from_placeholder(self):
+        """Add a Table of Contents at the position of the <!-- toc --> placeholder.
+        
+        This method is called when processing a TOC placeholder in the markdown.
+        It ensures the TOC appears at the correct position in the document flow.
+        """
+        # Add the table of contents
+        if self.add_toc:
+            self._add_table_of_contents()
+        
+        # Add approval section after TOC if not already added
+        if self.add_approval_section and self.front_matter and not getattr(self, '_approval_added', True):
+            self._add_approval_section()
+            self._approval_added = True
     
     def save(self, output_path: str):
         """Save the document to a file."""

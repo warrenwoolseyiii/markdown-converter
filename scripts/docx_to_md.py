@@ -46,7 +46,7 @@ SKIP_CONTENT_PATTERNS = [
 @dataclass
 class ParsedElement:
     """Represents a parsed document element."""
-    type: str  # 'heading', 'paragraph', 'table', 'list', 'code_block', 'image', 'horizontal_rule'
+    type: str  # 'heading', 'paragraph', 'table', 'list', 'code_block', 'image', 'horizontal_rule', 'page_break', 'toc'
     content: Any = None
     level: int = 0  # For headings and list indentation
     list_type: str = ''  # 'bullet' or 'numbered'
@@ -68,6 +68,7 @@ class DocxParser:
         self.front_matter: Dict[str, Any] = {}
         self._in_title_page = True  # Track if we're in title page section
         self._passed_toc = False  # Track if we've passed TOC
+        self._toc_placeholder_added = False  # Track if TOC placeholder was added
         
     def parse(self) -> List[ParsedElement]:
         """Parse the document into a list of structured elements."""
@@ -97,9 +98,35 @@ class DocxParser:
                 para = Paragraph(element, self.document._body)
                 text = para.text.strip()
                 
+                # Check for page break in this paragraph
+                if self._has_page_break(para):
+                    # Flush pending items before page break
+                    if current_list:
+                        self.elements.append(current_list)
+                        current_list = None
+                        current_list_type = None
+                    if code_block_lines:
+                        self.elements.append(ParsedElement(
+                            type='code_block',
+                            content='\n'.join(code_block_lines)
+                        ))
+                        code_block_lines = []
+                    self.elements.append(ParsedElement(type='page_break'))
+                    # If paragraph only contains page break, skip further processing
+                    if not text:
+                        continue
+                
                 # Skip empty paragraphs that are just spacing
                 if not text and not para.runs:
                     continue
+                
+                # Check for TOC content - add placeholder once then skip
+                if self._is_toc_content(para):
+                    if not self._toc_placeholder_added:
+                        # Add TOC placeholder element
+                        self.elements.append(ParsedElement(type='toc'))
+                        self._toc_placeholder_added = True
+                    continue  # Skip the actual TOC content
                 
                 # Check if we should skip this content
                 if self._should_skip_content(text, para):
@@ -248,25 +275,38 @@ class DocxParser:
     
     def _should_skip_content(self, text: str, para: Paragraph) -> bool:
         """Check if content should be skipped (TOC, title page elements, etc.)."""
-        # Skip TOC field content
-        if 'TOC' in str(para._p.xml) and 'instrText' in str(para._p.xml):
-            return True
-        
         # Check skip patterns
         for pattern in SKIP_CONTENT_PATTERNS:
             if re.match(pattern, text):
                 return True
         
-        # Skip centered large text that looks like title page content
-        # (but only if we haven't hit real content yet)
+        # Skip title page cosmetic elements (but NOT the Title style itself - that's the document title)
+        # (only if we haven't hit real content yet)
         if self._in_title_page and self.skip_title_page:
             style_name = para.style.name.lower() if para.style else ''
-            # Skip title style paragraphs at start
-            if 'title' in style_name:
-                return True
-            # Skip revision lines on title page
+            # Do NOT skip Title style - we want to capture it as H1
+            # Only skip revision lines and other cosmetic elements on title page
             if text.startswith('Revision ') and len(text) < 20:
                 return True
+        
+        return False
+    
+    def _is_toc_content(self, para: Paragraph) -> bool:
+        """Check if paragraph is part of a Table of Contents."""
+        # Check for TOC field content in XML
+        para_xml = str(para._p.xml)
+        if 'TOC' in para_xml and 'instrText' in para_xml:
+            return True
+        
+        # Check for TOC-related styles
+        style_name = para.style.name.lower() if para.style else ''
+        if 'toc' in style_name:
+            return True
+        
+        # Check for "Table of Contents" heading
+        text = para.text.strip()
+        if text == 'Table of Contents':
+            return True
         
         return False
     
@@ -338,10 +378,9 @@ class DocxParser:
         if 'toc' in style_name:
             return None
         
-        # Check for Title style (maps to H1, but we skip title page)
+        # Check for Title style - maps to H1 (document title)
+        # We always capture the Title style, even on title page
         if 'title' in style_name:
-            if self._in_title_page and self.skip_title_page:
-                return None
             return 1
         
         # Check for Heading styles
@@ -433,6 +472,19 @@ class DocxParser:
         
         return False
     
+    def _has_page_break(self, para: Paragraph) -> bool:
+        """Check if paragraph contains a page break.
+        
+        Page breaks in Word documents appear as <w:br w:type="page"/> within runs.
+        """
+        # Look for page break elements within the paragraph
+        for br in para._p.findall('.//w:br',
+            {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+            br_type = br.get(qn('w:type'))
+            if br_type == 'page':
+                return True
+        return False
+    
     def _get_run_font(self, run: Run) -> Optional[str]:
         """Get the font name from a run."""
         # Try direct font name
@@ -453,62 +505,77 @@ class DocxParser:
         return None
     
     def _extract_paragraph_content(self, para: Paragraph) -> str:
-        """Extract paragraph content with inline formatting markers."""
+        """Extract paragraph content with inline formatting markers.
+        
+        This method properly handles both regular runs and hyperlinks by iterating
+        through the paragraph's child elements in order, ensuring hyperlink text
+        is captured and converted to markdown link syntax.
+        """
         result = []
         
-        for run in para.runs:
-            text = run.text
-            if not text:
-                continue
-            
-            # Check for hyperlinks (need to handle separately)
-            # For now, just handle basic runs
-            
-            # Apply formatting
-            font_name = self._get_run_font(run)
-            is_monospace = font_name and font_name.lower() in MONOSPACE_FONTS
-            
-            if run.bold and run.italic:
-                text = f"***{text}***"
-            elif run.bold:
-                text = f"**{text}**"
-            elif run.italic:
-                text = f"*{text}*"
-            elif is_monospace:
-                text = f"`{text}`"
-            
-            result.append(text)
+        # Build a map of relationship IDs to URLs for hyperlinks
+        rels = self.document.part.rels
         
-        # Also check for hyperlinks in the paragraph
-        content = ''.join(result)
-        content = self._extract_hyperlinks(para, content)
-        
-        return content
-    
-    def _extract_hyperlinks(self, para: Paragraph, current_content: str) -> str:
-        """Extract hyperlinks from paragraph and convert to markdown syntax."""
-        # Find hyperlink elements in the paragraph XML
-        hyperlinks = para._p.findall('.//w:hyperlink', 
-                                      {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'})
-        
-        for hyperlink in hyperlinks:
-            # Get the relationship ID
-            r_id = hyperlink.get(qn('r:id'))
-            if r_id and r_id in self.document.part.rels:
-                rel = self.document.part.rels[r_id]
-                url = rel.target_ref
+        # Iterate through paragraph children in document order
+        # This ensures we capture both regular runs and hyperlinks in sequence
+        for child in para._p:
+            tag = child.tag.split('}')[-1]  # Remove namespace
+            
+            if tag == 'hyperlink':
+                # Handle hyperlink element
+                r_id = child.get(qn('r:id'))
+                url = None
                 
-                # Get the link text
-                link_text = ''.join(t.text for t in hyperlink.findall('.//w:t', 
-                    {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}) if t.text)
+                if r_id and r_id in rels:
+                    rel = rels[r_id]
+                    url = rel.target_ref
+                
+                # Also check for anchor (internal bookmark links)
+                anchor = child.get(qn('w:anchor'))
+                if anchor and not url:
+                    url = f"#{anchor}"
+                
+                # Extract all text from runs within the hyperlink
+                link_text_parts = []
+                for run_elem in child.findall('.//w:r',
+                    {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+                    # Get text from within the run
+                    for t_elem in run_elem.findall('.//w:t',
+                        {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}):
+                        if t_elem.text:
+                            link_text_parts.append(t_elem.text)
+                
+                link_text = ''.join(link_text_parts)
                 
                 if link_text and url:
-                    # Replace the text with markdown link
-                    # Note: This is a simple replacement that may not handle all cases
-                    md_link = f"[{link_text}]({url})"
-                    current_content = current_content.replace(link_text, md_link, 1)
+                    result.append(f"[{link_text}]({url})")
+                elif link_text:
+                    # No URL found, just output the text
+                    result.append(link_text)
+                    
+            elif tag == 'r':
+                # Handle regular run element
+                run = Run(child, para)
+                text = run.text
+                if not text:
+                    continue
+                
+                # Apply formatting
+                font_name = self._get_run_font(run)
+                is_monospace = font_name and font_name.lower() in MONOSPACE_FONTS
+                
+                if run.bold and run.italic:
+                    text = f"***{text}***"
+                elif run.bold:
+                    text = f"**{text}**"
+                elif run.italic:
+                    text = f"*{text}*"
+                elif is_monospace:
+                    text = f"`{text}`"
+                
+                result.append(text)
         
-        return current_content
+        return ''.join(result)
     
     def _extract_plain_text(self, para: Paragraph) -> str:
         """Extract plain text from paragraph without formatting."""
@@ -600,6 +667,10 @@ class MarkdownGenerator:
                 lines.append(self._image_to_md(element))
             elif element.type == 'horizontal_rule':
                 lines.append('---')
+            elif element.type == 'page_break':
+                lines.append('<!-- pagebreak -->')
+            elif element.type == 'toc':
+                lines.append('<!-- toc -->')
         
         # Clean up excessive blank lines
         result = '\n'.join(lines)

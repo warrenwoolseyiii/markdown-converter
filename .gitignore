@@ -3,3 +3,5 @@
 output/
 template/
 input/
+plans/
+scripts/__pycache__/
